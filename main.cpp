@@ -1,14 +1,16 @@
 #include "raylib.h"
 #include "box2d/box2d.h"
+#include <chrono>
 #include <cstdlib>
 #include <ctime>
+#include <iostream>
 
 // Screen dimensions
 const int screenWidth = 800;
 const int screenHeight = 600;
 
 // Number of balls (adjusted for stress test)
-int numBalls = 1000;  
+int numBalls = 1000;  // Example size, adjust as needed
 
 // Ball data structure
 struct Ball {
@@ -52,80 +54,91 @@ Ball CreateBall(b2World* world, float radius, Vector2 position, Color color) {
 
 // Function to create a wall in Box2D world
 void CreateWall(b2World* world, float x, float y, float width, float height) {
-    // Define the static body
     b2BodyDef bodyDef;
     bodyDef.position.Set(x, y);  // Set wall position in meters
     b2Body* body = world->CreateBody(&bodyDef);
 
-    // Define a box shape for the wall
     b2PolygonShape boxShape;
-    boxShape.SetAsBox(width / 2.0f, height / 2.0f);  // Half-width and half-height in meters
+    boxShape.SetAsBox(width / 2.0f, height / 2.0f);
 
-    // Create the wall fixture
-    body->CreateFixture(&boxShape, 0.0f);  // Static bodies have zero density
+    body->CreateFixture(&boxShape, 0.0f);
+}
+
+// Helper function to calculate moving average
+float CalculateMovingAverage(float newValue, float currentAverage, int frameCount) {
+    return ((currentAverage * (frameCount - 1)) + newValue) / frameCount;
 }
 
 int main(int argc, char** argv) {
-    // Allow user to modify number of balls via command line
     if (argc > 1) {
         numBalls = std::atoi(argv[1]);
     }
 
-    // Initialize raylib
-    InitWindow(screenWidth, screenHeight, "Raylib + Box2D Stress Test (1 Million Balls, Random Speed)");
+    InitWindow(screenWidth, screenHeight, "Raylib + Box2D Moving Average Benchmark");
     SetTargetFPS(60);
 
-    // Create a Box2D world with no gravity (0,0)
-    b2Vec2 gravity(0.0f, 0.0f);  // No gravity
+    b2Vec2 gravity(0.0f, 0.0f);
     b2World world(gravity);
 
-    // Create walls around the screen
-    CreateWall(&world, screenWidth / 200.0f, 0.05f, screenWidth / 100.0f, 0.1f);       // Top wall
-    CreateWall(&world, screenWidth / 200.0f, screenHeight / 100.0f - 0.05f, screenWidth / 100.0f, 0.1f); // Bottom wall
-    CreateWall(&world, 0.05f, screenHeight / 200.0f, 0.1f, screenHeight / 100.0f);     // Left wall
-    CreateWall(&world, screenWidth / 100.0f - 0.05f, screenHeight / 200.0f, 0.1f, screenHeight / 100.0f); // Right wall
+    CreateWall(&world, screenWidth / 200.0f, 0.05f, screenWidth / 100.0f, 0.1f);
+    CreateWall(&world, screenWidth / 200.0f, screenHeight / 100.0f - 0.05f, screenWidth / 100.0f, 0.1f);
+    CreateWall(&world, 0.05f, screenHeight / 200.0f, 0.1f, screenHeight / 100.0f);
+    CreateWall(&world, screenWidth / 100.0f - 0.05f, screenHeight / 200.0f, 0.1f, screenHeight / 100.0f);
 
-    // Create balls
     Ball* balls = new Ball[numBalls];
     std::srand(static_cast<unsigned int>(std::time(nullptr)));
     for (int i = 0; i < numBalls; i++) {
-        // Ball radius inversely proportional to the number of balls (1/x)
-        float radius = 60.0f / (i + 1);  // Decreases as i increases
+        float radius = 60.0f / (i + 1);
         Vector2 position = { static_cast<float>(std::rand() % screenWidth), static_cast<float>(std::rand() % screenHeight) };
         Color color = { (unsigned char)(std::rand() % 256),
                        (unsigned char)(std::rand() % 256),
                        (unsigned char)(std::rand() % 256),
-                       255 };  // Random color
+                       255 };
 
         balls[i] = CreateBall(&world, radius, position, color);
     }
 
-    // Main game loop
-    while (!WindowShouldClose()) {
-        // Update physics world (60 steps per second)
-        world.Step(1.0f / 60.0f, 6, 2);
+    // Variables for calculating moving averages
+    float physicsMovingAverage = 0;
+    float renderMovingAverage = 0;
+    int frameCount = 1;
 
-        // Start drawing
+    while (!WindowShouldClose()) {
+        // Start timing physics calculation
+        auto physicsStart = std::chrono::high_resolution_clock::now();
+        world.Step(1.0f / 60.0f, 6, 2);
+        auto physicsEnd = std::chrono::high_resolution_clock::now();
+
+        // Calculate physics time in milliseconds
+        float physicsTime = std::chrono::duration<float, std::milli>(physicsEnd - physicsStart).count();
+        physicsMovingAverage = CalculateMovingAverage(physicsTime, physicsMovingAverage, frameCount);
+
+        // Start timing rendering
+        auto renderStart = std::chrono::high_resolution_clock::now();
         BeginDrawing();
         ClearBackground(RAYWHITE);
 
-        // Draw all balls
         for (int i = 0; i < numBalls; i++) {
             b2Vec2 position = balls[i].body->GetPosition();
-            // Render the balls at their Box2D-calculated position
             DrawCircle(static_cast<int>(position.x * 100), static_cast<int>(position.y * 100), balls[i].radius, balls[i].color);
         }
 
-        // Display the number of balls and FPS
         DrawText(TextFormat("Number of balls: %d", numBalls), 10, 10, 20, DARKGRAY);
-        DrawFPS(10, 30);
+        DrawText(TextFormat("Physics Time: %.2f ms", physicsTime), 10, 40, 20, DARKGRAY);
+        DrawText(TextFormat("Render Time: %.2f ms", renderMovingAverage), 10, 70, 20, DARKGRAY);
+        DrawText(TextFormat("Average Physics Time: %.2f ms", physicsMovingAverage), 10, 100, 20, DARKGRAY);
+        DrawFPS(10, 130);
 
         EndDrawing();
+
+        // Calculate render time after EndDrawing
+        float renderTime = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - renderStart).count();
+        renderMovingAverage = CalculateMovingAverage(renderTime, renderMovingAverage, frameCount);
+        frameCount++;
     }
 
-    // Clean up
     delete[] balls;
-    CloseWindow();  // Close window and OpenGL context
+    CloseWindow();
 
     return 0;
 }
